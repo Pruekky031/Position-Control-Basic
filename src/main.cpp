@@ -22,6 +22,7 @@ float SetPoint = -200.0f;
 
 void readEncoder();
 float PIDSpeedControl(float SetPoint, float MotorRPM);
+float PIDPositionControl(float SetPoint, float MotorAngle);
 void SetMotorPWM(float PWM);
 
 void setup()
@@ -38,51 +39,6 @@ void setup()
   attachInterrupt(digitalPinToInterrupt(ENCA), readEncoder, RISING);
 }
 
-// void loop()
-// {
-
-//   if (Serial.available() > 0)
-//   {
-//     SetPoint = Serial.readStringUntil('\n').toFloat();
-//   }
-//   unsigned long currentTime = millis();
-//   float dt = (currentTime - previousTime) / 1000.0;
-
-//   if (dt >= 0.01)
-//   {
-
-//     unsigned long currentTime = millis();
-//     float dt = (currentTime - previousTime) / 1000.0;
-//     if (dt >= 0.01)
-//     {
-
-//       rpm = (velocity / PPR) * 60.0;
-//       revCount = (palue / PPR);
-//       motor_angle = (palue / PPR) * 360.0;
-//       if (motor_angle < 0)
-//       {
-//         motor_angle = 360 + fmod(motor_angle, 360.0);
-//       }
-//       else
-//       {
-//         motor_angle = fmod(motor_angle, 360.0);
-//       }
-//       SetMotorPWM(100);
-//       Serial.print(">motor_angle:");
-//       Serial.println(motor_angle);
-//       Serial.print(">revCount:");
-//       Serial.println(revCount);
-//       Serial.print(">rpm  :");
-//       Serial.println(rpm);
-//       // if (SetPoint != 0)
-//       // {
-//       //   float Output = PIDSpeedControl(abs(SetPoint), abs(rpm));
-//       //   SetMotorPWM(Output);
-//       // }
-//       velocity = 0;
-//     }
-//   }
-// }
 
 void loop()
 {
@@ -109,6 +65,7 @@ void loop()
       float Output = PIDSpeedControl(SetPoint, abs(rpm));
       SetMotorPWM(Output);
     }
+    previousTime = millis();
   }
 }
 
@@ -133,6 +90,150 @@ void readEncoder()
   prevTime = currentTime;
 }
 
+
+// PID Position Control
+float PIDPositionControl(float MotorAngleSetPoint, float MotorAngle)
+{
+
+  static float P_PositionControl;
+  static float I_PositionControl;
+  static float D_PositionControl;
+
+  float Kp;
+  float Ki;
+  float Kd;
+
+  // Setpoint direction + or -
+  if (SetPoint > 0)
+  {
+    if (SetPoint >= 150)
+    {
+      // high gain direction +
+
+      Kp = 3.3f;
+      Ki = 0.05f;
+      Kd = 0.0f;
+    }
+    else
+    {
+      // low gain direction +
+
+      Kp = 3.3f;
+      Ki = 0.02f;
+      Kd = 0.0f;
+    }
+  }
+  else
+  {
+    if (SetPoint <= -150)
+    {
+      // high gain direction -  
+
+      Kp = 3.5f;
+      Ki = 0.03f;
+      Kd = 0.03f;
+    }
+    else
+    {
+      // low gain direction -
+
+      Kp = 2.2f;
+      Ki = 0.05f;
+      Kd = 0.01f;
+    }
+  }
+
+  float Error_SpeedControl;
+  static float LastError_SpeedControl;
+  static float SumError;
+  float MaxSumError = 1000.0f;
+  float Output_SpeedControl;
+  static unsigned long MotorDoneTime;
+  static unsigned long PIDLoopTime_SpeedControl;
+
+  if (millis() - PIDLoopTime_SpeedControl >= 10)
+  {
+
+    Error_SpeedControl = abs(MotorAngleSetPoint) - MotorAngle;
+
+    SumError = SumError + Error_SpeedControl;
+
+    // sum P term
+    P_PositionControl = Kp * Error_SpeedControl;
+
+    // limit SumError to prevent integral windup
+    if (SumError > MaxSumError)
+      SumError = MaxSumError;
+    if (SumError < -MaxSumError)
+      SumError = -MaxSumError;
+
+    // delete I term if motor is Stopped for more than 70ms to prevent integral windup
+    if (millis() - MotorDoneTime >= 70)
+    {
+      I_PositionControl = 0;
+      MotorDoneTime = millis();
+    }
+
+    // Sum I term
+    I_PositionControl = I_PositionControl + (Ki * SumError);
+
+    // Sum D term
+    D_PositionControl = Kd * (Error_SpeedControl - LastError_SpeedControl) / 10.0;
+
+    // sum PID terms
+    Output_SpeedControl = P_PositionControl + I_PositionControl + D_PositionControl;
+
+    // save Error to LastError for next loop
+    LastError_SpeedControl = Error_SpeedControl;
+
+    // save current time for next loop
+    PIDLoopTime_SpeedControl = millis();
+
+    if (Output_SpeedControl > 255)
+      Output_SpeedControl = 255;
+    if (Output_SpeedControl < 0)
+      Output_SpeedControl = 0;
+
+    Serial.print(">MotorAngleSetPoint: ");
+    Serial.println(MotorAngleSetPoint);
+
+    
+      Serial.print(">MotorAngle: ");
+      Serial.println(MotorAngle);
+    
+
+    Serial.print(">Error: ");
+    Serial.println(Error_SpeedControl);
+    Serial.print(">Output: ");
+    Serial.println(Output_SpeedControl);
+    Serial.print(">Max: ");
+    Serial.println(SetPoint + 50);
+    Serial.print(">Min: ");
+    Serial.println(SetPoint - 50);
+
+    Serial.print(">Kp:");
+    Serial.println(Kp);
+
+    Serial.print(">Ki:");
+    Serial.println(Ki);
+
+    Serial.print(">Kd:");
+    Serial.println(Kd);
+
+    Serial.print(">P_PositionControl:");
+    Serial.println(P_PositionControl);
+
+    Serial.print(">I_PositionControl:");
+    Serial.println(I_PositionControl);
+
+    Serial.print(">D_PositionControl:");
+    Serial.println(D_PositionControl);
+
+    return Output_SpeedControl;
+  }
+}
+
+// PID Speed Control
 float PIDSpeedControl(float SetPoint, float MotorRPM)
 {
 
@@ -144,7 +245,6 @@ float PIDSpeedControl(float SetPoint, float MotorRPM)
   float Ki;
   float Kd;
 
-  SetPoint = 75.0f;
   // Setpoint direction + or -
   if (SetPoint > 0)
   {
@@ -279,6 +379,9 @@ float PIDSpeedControl(float SetPoint, float MotorRPM)
     return Output_SpeedControl;
   }
 }
+
+
+
 void SetMotorPWM(float PWM)
 {
   analogWrite(MOTOR_PWM, abs(PWM));
